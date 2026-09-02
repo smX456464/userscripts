@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         哔哩哔哩主页 IP 属地 + 评论区一键查主页IP（改进版）
 // @namespace    https://maxchang.me
-// @version      1.0.0
+// @version      1.0.1
 // @description  在哔哩哔哩个人主页显示 IP 属地，并在评论区每行添加“获取”按钮，点击即可查看该用户个人主页的 IP 属地（支持主评论和楼中楼）。基于 maxchang3 的 0.0.5 版扩展。
 // @author       smX456464 (github.com/smX456464)
 // @original-author maxchang3
@@ -173,16 +173,68 @@
     function scanAll() {
         const els = getAllElements(document);
         const roots = els.filter(el => el.tagName === 'BILI-COMMENT-THREAD-RENDERER' || el.tagName === 'BILI-COMMENT-REPLY-RENDERER');
+        if (roots.length === 0) return;
         roots.forEach(addButton);
+    }
+
+    // ---------- 主动轮询 + 智能检测（核心改进） ----------
+    let isScanning = false;
+
+    function startPolling() {
+        if (isScanning) return;
+        isScanning = true;
+
+        let attempts = 0;
+        const maxAttempts = 30; // 60 秒后停止轮询（2秒间隔 × 30次）
+
+        const interval = setInterval(() => {
+            attempts++;
+            // 检查评论区是否已加载
+            const hasComments = document.querySelector('bili-comment-thread-renderer');
+            if (hasComments) {
+                clearInterval(interval);
+                isScanning = false;
+                scanAll();
+                return;
+            }
+            // 超时停止轮询
+            if (attempts >= maxAttempts) {
+                clearInterval(interval);
+                isScanning = false;
+            }
+        }, 2000); // 每 2 秒检测一次
     }
 
     // ---------- 监听 ----------
     let timer;
-    const debounce = () => { clearTimeout(timer); timer = setTimeout(scanAll, 300); };
+    const debounce = () => {
+        clearTimeout(timer);
+        timer = setTimeout(scanAll, 300);
+    };
+
+    // 使用 MutationObserver 监听新评论加载
     const obs = new MutationObserver(debounce);
     obs.observe(document.body, { childList: true, subtree: true });
-    setTimeout(scanAll, 1500);
+
+    // 滚动触发
     window.addEventListener('scroll', debounce);
+
+    // ---------- 启动策略 ----------
+    // 1. 立即尝试一次（如果评论区已经加载）
+    setTimeout(scanAll, 500);
+
+    // 2. 启动轮询（解决懒加载问题）
+    setTimeout(startPolling, 1000);
+
+    // 3. 用户滚动时也尝试触发（额外保障）
+    window.addEventListener('scroll', () => {
+        // 如果发现有评论了，且还没被扫描过，立即扫描
+        if (document.querySelector('bili-comment-thread-renderer')) {
+            // 使用防抖避免频繁执行
+            clearTimeout(timer);
+            timer = setTimeout(scanAll, 200);
+        }
+    });
 
     // ---------- 菜单 ----------
     GM.registerMenuCommand('🔄 手动扫描评论区', scanAll);
